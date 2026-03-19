@@ -1,7 +1,17 @@
 import path from 'path';
 import fs from 'fs';
 import { CliOptions } from './types.js';
-import { execLiveArgs, logStep, logStepDone, logError, logSuccess, logInfo } from './utils.js';
+import {
+  execLiveArgs,
+  getCommandVersion,
+  logStep,
+  logStepDone,
+  logError,
+  logSuccess,
+  logInfo,
+} from './utils.js';
+
+const DOCS_URL = 'https://reactonrails.com/docs/';
 
 function cleanupAppDirectory(
   appPath: string,
@@ -64,9 +74,99 @@ export function buildGeneratorArgs(options: CliOptions): string[] {
     args.push('--rsc');
   }
 
+  // --force makes the generator overwrite conflicting files without prompting,
+  // which is safe for a freshly scaffolded app with no custom content yet.
+  args.push('--force');
+  // The newly created app directory is not a git repo yet, so the generator's
+  // uncommitted-changes check would always warn. --ignore-warnings bypasses all
+  // generator validation warnings (git, Node version, package manager) which is
+  // acceptable for a fresh app where prerequisites were already checked above.
   args.push('--ignore-warnings');
 
   return args;
+}
+
+function packageManagerFieldValue(packageManager: CliOptions['packageManager']): string {
+  const version = getCommandVersion(packageManager)?.replace(/^v/, '');
+  if (!version) {
+    logInfo(
+      `Could not detect ${packageManager} version; package.json "packageManager" field will omit the version.`,
+    );
+  }
+  return version ? `${packageManager}@${version}` : packageManager;
+}
+
+function updateJsonFile(
+  filePath: string,
+  updater: (data: Record<string, unknown>) => Record<string, unknown>,
+): void {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+
+  let json: Record<string, unknown>;
+  try {
+    json = JSON.parse(fs.readFileSync(filePath, 'utf8')) as Record<string, unknown>;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'invalid JSON';
+    throw new Error(`Could not parse ${filePath}: ${message}`);
+  }
+  const updatedJson = updater(json);
+  fs.writeFileSync(filePath, `${JSON.stringify(updatedJson, null, 2)}\n`, 'utf8');
+}
+
+function rewriteFileIfPresent(filePath: string, transform: (contents: string) => string): void {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+
+  const original = fs.readFileSync(filePath, 'utf8');
+  const updated = transform(original);
+  if (updated !== original) {
+    fs.writeFileSync(filePath, updated, 'utf8');
+  }
+}
+
+function normalizeGeneratedPackageManager(
+  appPath: string,
+  packageManager: CliOptions['packageManager'],
+): void {
+  if (packageManager !== 'pnpm') {
+    return;
+  }
+
+  logInfo('Normalizing generated app for pnpm...');
+
+  const packageJsonPath = path.join(appPath, 'package.json');
+  const packageLockPath = path.join(appPath, 'package-lock.json');
+  const setupPath = path.join(appPath, 'bin', 'setup');
+
+  updateJsonFile(packageJsonPath, (json) => ({
+    ...json,
+    packageManager: packageManagerFieldValue(packageManager),
+  }));
+
+  if (fs.existsSync(packageLockPath)) {
+    execLiveArgs('pnpm', ['import'], appPath);
+    execLiveArgs('pnpm', ['install'], appPath);
+    fs.rmSync(packageLockPath, { force: true });
+  } else {
+    execLiveArgs('pnpm', ['install'], appPath);
+  }
+
+  rewriteFileIfPresent(setupPath, (contents) => {
+    // Match both system!("npm install") and system("npm install") in bin/setup,
+    // preserving the bang (!) if present.
+    const updated = contents.replace(/system(!?)\((["'])npm install\2\)/g, 'system$1($2pnpm install$2)');
+    if (updated === contents && /(?<![p])npm install/.test(contents)) {
+      logInfo(
+        'Could not auto-update bin/setup for pnpm. Replace "npm install" with "pnpm install" manually.',
+      );
+    }
+    return updated;
+  });
+
+  logStepDone('pnpm configuration applied');
 }
 
 function printSuccessMessage(appName: string, route: string): void {
@@ -75,11 +175,16 @@ function printSuccessMessage(appName: string, route: string): void {
   console.log('');
   logInfo('Next steps:');
   console.log(`  cd ${appName}`);
+  console.log('  bin/rails db:prepare');
   console.log('  bin/dev');
+  console.log('');
+  logInfo(
+    'Note: The generated app uses PostgreSQL by default. Start PostgreSQL before running bin/rails db:prepare.',
+  );
   console.log('');
   logInfo(`Then visit http://localhost:3000/${route}`);
   console.log('');
-  logInfo('Documentation: https://reactonrails.com/docs/');
+  logInfo(`Documentation: ${DOCS_URL}`);
   console.log('');
 }
 
@@ -200,6 +305,10 @@ export function createApp(appName: string, options: CliOptions): void {
       'bundle',
       ['exec', 'rails', 'generate', 'react_on_rails:install', ...generatorArgs],
       appPath,
+      {
+        ...process.env,
+        REACT_ON_RAILS_PACKAGE_MANAGER: options.packageManager,
+      },
     );
     logStepDone('React on Rails setup complete');
   } catch (error) {
@@ -213,6 +322,25 @@ export function createApp(appName: string, options: CliOptions): void {
       'Directory removed. Fix the generator issue and rerun.',
       `Delete the created "${appName}" directory and rerun once the generator issue is resolved.`,
     );
+    process.exit(1);
+  }
+
+  try {
+    normalizeGeneratedPackageManager(appPath, options.packageManager);
+  } catch (error) {
+    logError(
+      `Failed to finish ${options.packageManager} setup. The app was created, but package manager normalization did not complete.`,
+    );
+    if (error instanceof Error && error.message) {
+      console.error(`Debug info: ${error.message}`);
+    }
+    logInfo('To finish manually:');
+    if (options.packageManager === 'pnpm') {
+      console.log(`  cd ${appName}`);
+      console.log('  pnpm import');
+      console.log('  rm -f package-lock.json');
+      console.log('  pnpm install');
+    }
     process.exit(1);
   }
 

@@ -21,6 +21,26 @@ rails generate react_on_rails:install
 - `shakapacker.yml` settings
 - other configuration files
 
+## Upgrade Preflight
+
+Before changing versions, check these first:
+
+1. **Ruby and Node requirements**: React on Rails v16 requires Ruby 3.0+ and Node 18+.
+2. **Bundler age**: legacy apps may have lockfiles created by Bundler 1.x. Those lockfiles can fail on modern Ruby before the React on Rails upgrade even starts.
+3. **Rails version**: current `react_on_rails` requires Rails 5.2+. Rails 5.1 apps need a Rails upgrade before they can bundle v16.
+4. **Asset stack**: if the app still uses `webpacker`, upgrade to `shakapacker` first.
+5. **Version pinning**: use exact gem and npm package versions for React on Rails-related packages. Avoid `^`, `~`, or `*`.
+
+If your app is both Ruby/Bundler-old and Webpacker-old, do those upgrades first. Trying to jump directly from a Rails 5 / Webpacker 3 / Bundler 1 stack to current React on Rails is usually more than one migration.
+
+If the first failure is a Bundler 1.x lockfile, refresh that lockfile with Bundler 2.x before changing React on Rails:
+
+```bash
+gem install bundler   # if Bundler 2.x is not already available
+bundle lock --update
+bundle install
+```
+
 ## Upgrading Precompile Hooks for SSR + HMR
 
 If your app uses server-side rendering with HMR, Shakapacker commonly runs two webpack processes during development (client HMR and server watcher). In that setup, direct-command precompile hooks are more fragile because each process can trigger the hook.
@@ -93,16 +113,18 @@ This is a minor release - update your gem and npm package versions, then run `bu
 
 1. **Update Dependencies**
 
+   > **Note**: The versions below are examples. Check the [changelog](https://github.com/shakacode/react_on_rails/blob/master/CHANGELOG.md) for the latest stable release and substitute accordingly.
+
    ```ruby
    # Gemfile
-   gem "react_on_rails", "~> 16.0"
+   gem "react_on_rails", "16.4.0"
    ```
 
    ```json
-   // package.json
+   // package.json — use the npm equivalent of the same release
    {
      "dependencies": {
-       "react-on-rails": "^16.0.0"
+       "react-on-rails": "16.4.0"
      }
    }
    ```
@@ -110,17 +132,19 @@ This is a minor release - update your gem and npm package versions, then run `bu
 2. **Install Updates**
 
    ```bash
-   bundle update react_on_rails
-   npm install
+   bundle update react_on_rails shakapacker
+   # then run your package manager's install command
+   npm install   # or: yarn install / pnpm install
    ```
 
 3. **Run Generator**
 
    ```bash
-   rails generate react_on_rails:install
+   bundle exec rails generate react_on_rails:install
    ```
 
 4. **Review and Apply Changes**
+   - If your app was still on `webpacker`, finish that migration first
    - Check webpack configuration exports (function naming may have changed)
    - Review `shakapacker.yml` settings
    - Update `bin/dev` if needed
