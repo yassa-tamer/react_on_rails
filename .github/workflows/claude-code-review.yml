@@ -1,7 +1,7 @@
 name: Claude Code Review
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, ready_for_review, reopened]
 
 jobs:
@@ -17,6 +17,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
+          # `pull_request_target` runs in the base repo context, so check out the PR
+          # merge ref explicitly to review the proposed changes instead of `main`.
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
           fetch-depth: 1
 
       - name: Run Claude Code Review
